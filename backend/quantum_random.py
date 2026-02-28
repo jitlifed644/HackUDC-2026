@@ -37,7 +37,7 @@ def generacion_contraseñas(caracteres=20, tiempo_max_espera=30, reintentos=0):
     umbral_70 = int(caracteres * 0.7)
     
     if not (12 <= caracteres <= 32):
-        return "Error: Longitud no permitida"
+        return -1
 
     qc = QuantumCircuit(1, 1)
     qc.h(0)
