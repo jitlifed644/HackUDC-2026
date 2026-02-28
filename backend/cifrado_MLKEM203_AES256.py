@@ -8,11 +8,7 @@ import os
 # ========================
 # TU FUNCIÓN REAL DE CONTRASEÑA CUÁNTICA (cámbiala por la tuya)
 # ========================
-def generar_contrasena():
-    # Aquí pones tu código real que llama a la API del ordenador cuántico
-    # Debe devolver una string ASCII imprimible (16-32 chars)
-    # Por ahora, ejemplo estático para probar
-    return "Kj#9pL2mQx!vT8rWnZ4fG5hJ8k"  # ← CAMBIA ESTO POR TU FUNCIÓN REAL
+from quantum_random import generacion_contraseñas
 
 # ========================
 # 1. Generar par de claves ML-KEM-768 (solo una vez por usuario/sesión)
@@ -33,7 +29,7 @@ print(f"  Ciphertext ML-KEM: {len(ciphertext_ml_kem)} bytes (~1088)")
 # ========================
 # 3. Generar y cifrar la contraseña con AES-256-GCM usando k
 # ========================
-contrasena = generar_contrasena()
+contrasena = generacion_contraseñas(20)
 contrasena_bytes = contrasena.encode('utf-8')
 
 # Nonce aleatorio seguro (12 bytes recomendado para GCM)
