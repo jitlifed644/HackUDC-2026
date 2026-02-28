@@ -7,10 +7,18 @@ import math
 from collections import Counter
 from qiskit_ibm_runtime import SamplerV2 as Sampler
 from qiskit.transpiler import generate_preset_pass_manager
+import os
+from dotenv import load_dotenv
 
-# Mantén tu API_KEY como la tienes
-API_KEY = "0DAkDe6VhVZdG4GIsTgNR0d0DpUAP5Sr2fJq3WW-ZvYp"
+# Cargamos las variables del archivo .env
+load_dotenv()
 
+# Obtenemos el token de forma segura
+API_KEY = os.getenv("IBM_QUANTUM_TOKEN")
+
+if not API_KEY:
+    # Si no hay token, el sistema usará el simulador local (Aer) automáticamente
+    print("⚠️ IBM_QUANTUM_TOKEN no encontrado. Usando fallback local.")
 def calcular_entropia(texto):
     if not texto: return 0
     frecuencias = Counter(texto)
@@ -67,6 +75,7 @@ def generacion_contraseñas(caracteres=20, tiempo_max_espera=30, reintentos=0):
         pub_result = result[0]
         registro_nombre = list(pub_result.data.keys())[0]
         bits = pub_result.data[registro_nombre].get_bitstrings()
+        print("IBM Quantum")
 
     # --- PARTE B: FALLBACK ---
     except Exception as e:
@@ -75,6 +84,7 @@ def generacion_contraseñas(caracteres=20, tiempo_max_espera=30, reintentos=0):
         t_qc = transpile(qc, backend)
         job = backend.run(t_qc, shots=caracteres * 8, memory=True)
         bits = job.result().get_memory()
+        print("Emulador cuantico")
 
     # --- PARTE C: TRADUCCIÓN Y ENTROPÍA ---
     args = [iter(bits)] * 8

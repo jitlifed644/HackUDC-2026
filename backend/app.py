@@ -3,6 +3,10 @@ import os
 import sqlite3
 from datetime import datetime
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from dotenv import load_dotenv
+
+load_dotenv()
+api_key = os.getenv("IBM_QUANTUM_TOKEN")
 
 # Configuración de página: DEBE SER EL PRIMER COMANDO DE STREAMLIT
 st.set_page_config(page_title="PQC Quantum Vault", page_icon="🔐", layout="wide")
