@@ -100,9 +100,3 @@ def generacion_contraseñas(caracteres=20, tiempo_max_espera=30, reintentos=0):
                 return generacion_contraseñas(caracteres, reintentos=reintentos+1)
     
     return password
-
-# Llama a la función y guarda el resultado
-resultado = generacion_contraseñas(caracteres=20)
-
-# Imprime el resultado final fuera de los debuggers
-print(f"\n🚀 RESULTADO FINAL: {resultado}")
