@@ -1,86 +1,108 @@
-# quantum_random.py
-# Genera 8 bits verdaderamente aleatorios desde hardware cuántico real de IBM (transpilado)
-from qiskit import QuantumCircuit, transpile
-from qiskit.transpiler import generate_preset_pass_manager
-from qiskit_ibm_runtime import QiskitRuntimeService, SamplerV2 as Sampler
-from qiskit_aer import Aer
 import string
+import time # Para medir cuánto tarda el hardware real
+from qiskit import QuantumCircuit, transpile
+from qiskit_aer import Aer
+from qiskit_ibm_runtime import QiskitRuntimeService, RuntimeJobTimeoutError
+import math
+from collections import Counter
+from qiskit_ibm_runtime import SamplerV2 as Sampler
+from qiskit.transpiler import generate_preset_pass_manager
 
-# print("=== Generador de 8 bits cuánticos aleatorios (transpilado) ===\n")
+# Mantén tu API_KEY como la tienes
+API_KEY = "0DAkDe6VhVZdG4GIsTgNR0d0DpUAP5Sr2fJq3WW-ZvYp"
 
-# service = QiskitRuntimeService()
+def calcular_entropia(texto):
+    if not texto: return 0
+    frecuencias = Counter(texto)
+    longitud = len(texto)
+    entropia = -sum((count / longitud) * math.log2(count / longitud) 
+                    for count in frecuencias.values())
+    return entropia
 
-# print("Buscando backend disponible...")
-# backend = service.least_busy(operational=True, simulator=False, min_num_qubits=5)
-# print(f"→ Usando: {backend.name} ({backend.num_qubits} qubits)")
+def seleccionar_backend_inteligente(service, max_cola=3):
+    backends = service.backends(simulator=False, operational=True)
+    if not backends:
+        raise Exception("No hay backends reales operativos.")
+    
+    mejor = min(backends, key=lambda b: b.status().pending_jobs)
+    cola_actual = mejor.status().pending_jobs
+    
+    if cola_actual > max_cola:
+        raise Exception(f"Cola saturada ({cola_actual} > {max_cola})")
+    return mejor
 
-# num_bits = 8
-# qc = QuantumCircuit(num_bits)
-# qc.h(range(num_bits))
-# qc.measure_all()
-
-# print("Transpilando circuito para el backend...")
-# pm = generate_preset_pass_manager(backend=backend, optimization_level=1)
-# isa_circuit = pm.run(qc)
-# print("→ Circuito transpilado y listo para hardware real\n")
-
-# sampler = Sampler(mode=backend)
-# job = sampler.run([isa_circuit], shots=1)
-
-# print(f"Job enviado a '{backend.name}'...")
-# print("Esperando resultado... (10s a 5-10 min en free tier)\n")
-
-# result = job.result()
-# pub_result = result[0]
-# counts = pub_result.data.meas.get_counts()
-# binary_string = max(counts, key=counts.get)
-
-# print("Resultado cuántico (verdaderamente aleatorio):")
-# print(f"  Binario:     {binary_string}")
-# print(f"  Hexadecimal: 0x{int(binary_string, 2):02X}")
-# print(f"  Decimal:     {int(binary_string, 2)}")
-
-# byte_value = int(binary_string, 2)
-# if 33 <= byte_value <= 126:
-#     print(f"  Carácter ASCII imprimible seguro: '{chr(byte_value)}'")
-# else:
-#     print(f"  Carácter no imprimible o no seguro (código {byte_value}) → usa hex o decimal directamente")
-
-# print("\n¡Éxito! Estos 8 bits vienen de entropía cuántica real.")
-# print("Úsalos para seeds, bytes de clave, pruebas de cifrado, etc.")
-
-
-
-def generacion_contraseñas(caracteres=20):
+def generacion_contraseñas(caracteres=20, tiempo_max_espera=30, reintentos=0):
     alfabeto = string.ascii_letters + string.digits + "!@#$%^&*"
     n = len(alfabeto)
-    if(caracteres>=12 or caracteres<=32):
-        qc=QuantumCircuit(1, 1)
-        qc.h
-        qc.measure(0, 0)
-
-        try:
-            service = QiskitRuntimeService(channel="ibm_quantum", token=API_KEY)
-            return service.least_busy(simulator=False)
-        except:
-            print("⚠️ Error con hardware real, cayendo a simulador...")
-            backend = Aer.get_backend('qasm_simulator') 
-            t_qc = transpile(qc, backend)
-            job = backend.run(t_qc, shots=caracteres*8, memory=True)
-            bits = job.result().get_memory()
-            args = [iter(bits)] * 8
-            password = ""
-
-            # Zip va sacando grupos de 8 elementos (un byte)
-            for p in zip(*args):
-                # p es una tupla: ('0', '1', '1', ...)
-                byte_str = "".join(p)
+    umbral_70 = int(caracteres * 0.7)
     
-                # Convertimos el binario a decimal (0-255)
-                valor_decimal = int(byte_str, 2)
-                
-                # APLICAMOS EL MAPEO (No trunques, usa módulo)
-                # Esto asegura que CUALQUIER byte cuántico se convierta en un carácter válido
-                indice = valor_decimal % n
-                password += alfabeto[indice]
-                return Aer.get_backend('qasm_simulator')
+    if not (12 <= caracteres <= 32):
+        return "Error: Longitud no permitida"
+
+    qc = QuantumCircuit(1, 1)
+    qc.h(0)
+    qc.measure(0, 0)
+    bits = []
+
+    # --- PARTE A: HARDWARE REAL ---
+    inicio_quantum = time.time()
+    try:
+        service = QiskitRuntimeService(channel="ibm_quantum_platform", token=API_KEY)
+        backend = seleccionar_backend_inteligente(service, max_cola=3) 
+        
+        # 1. PASO OBLIGATORIO: Crear un circuito ISA (Instruction Set Architecture)
+        # Esto adapta tu circuito a la disposición física de ibm_fez
+        pm = generate_preset_pass_manager(backend=backend, optimization_level=1)
+        isa_circuit = pm.run(qc)
+        
+        # 2. USAR EL SAMPLER
+        sampler = Sampler(mode=backend)
+
+        
+        job = sampler.run([isa_circuit], shots=caracteres * 8)
+        result = job.result(timeout=tiempo_max_espera)
+        
+        # 3. EXTRAER BITS (Cambia la forma de obtener los datos)
+        # Accedemos al primer 'pub' (Public Result) y a sus bits de medida
+        pub_result = result[0]
+        registro_nombre = list(pub_result.data.keys())[0]
+        bits = pub_result.data[registro_nombre].get_bitstrings()
+
+    # --- PARTE B: FALLBACK ---
+    except Exception as e:
+
+        backend = Aer.get_backend('qasm_simulator') 
+        t_qc = transpile(qc, backend)
+        job = backend.run(t_qc, shots=caracteres * 8, memory=True)
+        bits = job.result().get_memory()
+
+    # --- PARTE C: TRADUCCIÓN Y ENTROPÍA ---
+    args = [iter(bits)] * 8
+    password = ""
+
+    for i, p in enumerate(zip(*args)):
+        byte_str = "".join(p)
+        valor_decimal = int(byte_str, 2)
+        password += alfabeto[valor_decimal % n]
+
+        # Fase 1: Check temprano (8 caracteres)
+        if i == 7:
+            h_inicial = calcular_entropia(password)
+            print(f"📊 [CHECK 1] Caracteres: 8 | Entropía Shannon: {h_inicial:.4f}")
+            if h_inicial < 2.0:
+                return generacion_contraseñas(caracteres, reintentos=reintentos+1)
+
+        # Fase 2: Tu idea del 70%
+        if i == umbral_70:
+            h_70 = calcular_entropia(password)
+            print(f"📊 [CHECK 2] Caracteres: {i+1} (70%) | Entropía Shannon: {h_70:.4f}")
+            if h_70 < 3.2:
+                return generacion_contraseñas(caracteres, reintentos=reintentos+1)
+    
+    return password
+
+# Llama a la función y guarda el resultado
+resultado = generacion_contraseñas(caracteres=20)
+
+# Imprime el resultado final fuera de los debuggers
+print(f"\n🚀 RESULTADO FINAL: {resultado}")
