@@ -1,0 +1,12 @@
+streamlit
+qiskit
+qiskit-ibm-runtime
+qiskit-aer
+argon2-cffi
+cryptography
+kyber-py
+pyotp
+qrcode
+pyotp
+qrcode
+
