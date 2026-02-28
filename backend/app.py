@@ -1,233 +1,293 @@
 # app.py
 import streamlit as st
 import os
-import binascii
+from datetime import datetime
 from kyber_py.ml_kem import ML_KEM_768
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+import sqlite3
+import traceback
 
 # ======================== IMPORT CUÁNTICO ========================
-from quantum_random import generacion_contraseñas
+try:
+    from quantum_random import generacion_contraseñas
+except ImportError:
+    st.error("No se encuentra el módulo quantum_random.py")
+    st.stop()
 
-# Configuración inicial
-st.set_page_config(page_title="Quantum ML-KEM Demo", page_icon="🔐", layout="centered")
+# ======================== CONFIGURACIÓN ========================
+st.set_page_config(
+    page_title="Quantum ML-KEM Demo",
+    page_icon="🔐",
+    layout="wide"
+)
 
-# CSS para slider, loading giratorio y overlay de bloqueo
-st.markdown("""
-<style>
-    .stSlider {
-        padding: 2rem 1rem;
-        max-width: 600px;
-        margin: 0 auto;
-    }
-    .stSlider > div > div > div > div {
-        height: 16px !important;
-    }
-    .stSlider > div > div > div > div > div {
-        height: 40px !important;
-        width: 40px !important;
-        border-radius: 50% !important;
-    }
-    .spinner {
-        font-size: 6rem;
-        animation: spin 1.5s linear infinite;
-    }
-    @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-    }
-    .overlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0, 0, 0, 0.4);
-        z-index: 9999;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        pointer-events: auto;
-    }
-    .overlay-content {
-        background: white;
-        padding: 2rem 3rem;
-        border-radius: 12px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        text-align: center;
-        font-size: 1.4rem;
-        color: #333;
-    }
-</style>
-""", unsafe_allow_html=True)
+KEYS_DIR = "./local_private_keys"
+os.makedirs(KEYS_DIR, exist_ok=True)
 
-# Estado inicial
+# ======================== BASE DE DATOS ========================
+conn = sqlite3.connect("secure_keys.db", check_same_thread=False)
+c = conn.cursor()
+c.execute("""
+CREATE TABLE IF NOT EXISTS generations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    ciphertext_ml_kem BLOB NOT NULL,
+    nonce BLOB NOT NULL,
+    cifrado BLOB NOT NULL
+)
+""")
+conn.commit()
+
+# ======================== ESTADO ========================
+if "mode" not in st.session_state:
+    st.session_state.mode = "menu"
 if "step" not in st.session_state:
     st.session_state.step = 1
-    st.session_state.length = 20
-    st.session_state.generated = False
-    st.session_state.user_email = ""
+if "temp_data" not in st.session_state:
+    st.session_state.temp_data = {}
 
-# Validación simple de correo Gmail
-def is_valid_gmail(email):
-    return "@gmail.com" in email.lower() and len(email) > 10
-
-# ────────────────────────────────────────────────
-# PASO 1: Usuario + slider + botón
-# ────────────────────────────────────────────────
-if st.session_state.step == 1:
-    st.title("🔐 Generador Post-Cuántico")
-    st.markdown("**Demo HackUDC 2026**")
-    st.divider()
-
-    # Apartado de usuario (nuevo)
-    st.subheader("Identificación del usuario")
-    st.caption("Introduce tu correo Gmail para asociar la generación (opcional pero recomendado)")
-
-    email_input = st.text_input(
-        "Correo Gmail",
-        value=st.session_state.user_email,
-        placeholder="ejemplo@gmail.com",
-        help="Solo se usa para asociar esta sesión (no se envía ni almacena externamente en esta demo)"
-    )
-
-    if email_input:
-        if is_valid_gmail(email_input):
-            st.session_state.user_email = email_input
-            st.success(f"Correo asociado: {email_input}")
-        else:
-            st.warning("Por favor introduce un correo Gmail válido (termina en @gmail.com)")
+# ======================== SIDEBAR ========================
+with st.sidebar:
+    st.title("Quantum ML-KEM")
+    st.caption("Demo HackUDC 2026")
 
     st.divider()
 
-    st.markdown("<h3 style='text-align: center;'>Elige la longitud de la contraseña</h3>", unsafe_allow_html=True)
-    
-    length = st.slider(
-        label="Longitud",
-        min_value=12,
-        max_value=32,
-        value=st.session_state.length,
-        step=1,
-        label_visibility="collapsed"
-    )
-    
-    st.markdown(f"<p style='text-align: center; font-size: 1.3rem; margin-top: 1rem;'><strong>{length} caracteres</strong></p>", unsafe_allow_html=True)
-    st.markdown("<div style='height: 3rem;'></div>", unsafe_allow_html=True)
-
-    if st.button("Siguiente → Generar", type="primary", use_container_width=True):
-        if not st.session_state.user_email:
-            st.warning("Recomendamos asociar un correo antes de continuar")
-        st.session_state.length = length
-        st.session_state.step = 2
+    if st.button("🏠 Menú principal", use_container_width=True):
+        st.session_state.mode = "menu"
+        st.session_state.step = 1
+        st.session_state.temp_data = {}
         st.rerun()
 
-# ────────────────────────────────────────────────
-# PASO 2: Loading con spinner giratorio + overlay + progreso
-# ────────────────────────────────────────────────
-elif st.session_state.step == 2:
-    # Overlay y spinner inmediato
-    st.markdown("""
-    <div class="overlay">
-        <div class="overlay-content">
-            <div class="spinner">⚙️</div>
-            <div style="margin-top: 1.5rem;">Generando materiales seguros...</div>
-            <div style="margin-top: 0.8rem; font-size: 1.1rem; color: #666;">Por favor espera unos segundos</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    if st.button("➕ Nueva contraseña", type="primary", use_container_width=True):
+        st.session_state.mode = "crear"
+        st.session_state.step = 1
+        st.session_state.temp_data = {}
+        st.rerun()
 
-    progress = st.empty()
+    if st.button("📋 Lista de contraseñas", use_container_width=True):
+        st.session_state.mode = "listar"
+        st.rerun()
 
-    if not st.session_state.generated:
-        progress.info("Iniciando generación de claves post-cuánticas...")
-        ek, dk = ML_KEM_768.keygen()
-
-        progress.info("Encapsulando clave simétrica...")
-        shared_key, ciphertext_ml_kem = ML_KEM_768.encaps(ek)
-
-        progress.info("Generando contraseña con entropía cuántica...")
-        contrasena = generacion_contraseñas(st.session_state.length)
-        contrasena_bytes = contrasena.encode("utf-8")
-
-        progress.info("Cifrando con AES-256-GCM...")
-        nonce = os.urandom(12)
-        aesgcm = AESGCM(shared_key)
-        cifrado = aesgcm.encrypt(nonce, contrasena_bytes, None)
-
-        st.session_state.results = {
-            "contrasena": contrasena,
-            "nonce_hex": nonce.hex(),
-            "cifrado_hex": cifrado.hex(),
-            "ciphertext_ml_kem_hex": binascii.hexlify(ciphertext_ml_kem).decode(),
-            "dk_full_hex": binascii.hexlify(dk).decode(),
-        }
-        st.session_state.generated = True
-
-        progress.success("¡Proceso completado! Redirigiendo...")
-        import time
-        time.sleep(1.2)
-
-    st.session_state.step = 3
-    st.rerun()
-
-# ────────────────────────────────────────────────
-# PASO 3: Resultados (sin "Contraseña recuperada")
-# ────────────────────────────────────────────────
-elif st.session_state.step == 3:
-    st.title("🔐 Resultado Generado")
-    st.success("Generación completada correctamente")
-
-    if st.session_state.user_email:
-        st.info(f"Asociado al usuario: {st.session_state.user_email}")
-
-    res = st.session_state.results
-
-    st.divider()
-
-    st.subheader("Clave Privada ML-KEM (dk)")
-    st.warning("ESTA CLAVE ES EXTREMADAMENTE SENSIBLE – NUNCA LA COMPARTAS")
-
-    with st.expander("Mostrar clave privada completa (solo tú debes verla)", expanded=False):
-        st.code(res["dk_full_hex"])
-        st.error("Guárdala SOLO en tu dispositivo seguro (HSM, enclave, archivo cifrado con contraseña maestra).")
+# ======================================================
+# MENÚ PRINCIPAL
+# ======================================================
+if st.session_state.mode == "menu":
+    st.title("🔐 Generador Post-Cuántico Seguro")
+    st.markdown("**Demo HackUDC 2026**")
 
     st.markdown("""
-    ### Instrucciones de uso importantes:
-    1. **Guarda la clave privada (dk)** en un lugar extremadamente seguro en tu PC.
-    2. **Envía o almacena** los siguientes datos (públicos/cifrados):
-       - Ciphertext ML-KEM
-       - Nonce
-       - Cifrado AES-GCM
-    3. La contraseña generada está asociada a esta clave privada.
-    4. **No reutilices el mismo par de claves** para varias contraseñas en producción.
+    • ML-KEM-768 (Kyber)  
+    • AES-256-GCM  
+    • Entropía cuántica real (IBM Quantum + fallback)
     """)
 
     st.divider()
 
-    st.subheader("Datos para enviar o guardar (sin clave privada)")
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**Ciphertext ML-KEM**")
-        st.code(res["ciphertext_ml_kem_hex"][:96] + "...")
+        if st.button("➕ Generar nueva contraseña", type="primary", use_container_width=True):
+            st.session_state.mode = "crear"
+            st.session_state.step = 1
+            st.rerun()
+
     with col2:
-        st.markdown("**Nonce**")
-        st.code(res["nonce_hex"])
+        if st.button("📋 Ver / recuperar contraseñas", use_container_width=True):
+            st.session_state.mode = "listar"
+            st.rerun()
 
-    st.markdown("**Cifrado AES-GCM**")
-    st.code(res["cifrado_hex"])
+    st.info("Claves privadas → carpeta `./local_private_keys` (solo este equipo)")
 
-    datos_txt = f"""Usuario asociado: {st.session_state.user_email or 'No especificado'}
-Ciphertext ML-KEM (hex): {res['ciphertext_ml_kem_hex']}
-Nonce (hex): {res['nonce_hex']}
-Cifrado AES-GCM (hex): {res['cifrado_hex']}
-"""
-    st.download_button(
-        "⬇️ Descargar datos (sin clave privada)",
-        datos_txt,
-        file_name="datos_seguros_ml_kem.txt",
-        mime="text/plain"
-    )
+# ======================================================
+# LISTAR + RECUPERAR
+# ======================================================
+elif st.session_state.mode == "listar":
+    st.title("📋 Contraseñas guardadas")
+    st.markdown("**Carpeta de claves privadas:** `./local_private_keys`")
+    st.caption("Usa el archivo `key_{ID}.bin` correspondiente para recuperar la contraseña")
 
-    if st.button("← Generar otra contraseña", use_container_width=True):
-        st.session_state.step = 1
-        st.session_state.generated = False
+    c.execute("SELECT id, name, created_at FROM generations ORDER BY id DESC")
+    rows = c.fetchall()
+
+    if not rows:
+        st.info("Aún no hay contraseñas guardadas.")
+    else:
+        st.success(f"{len(rows)} contraseñas encontradas")
+
+        for rid, name, fecha in rows:
+            key_file = f"key_{rid}.bin"
+            key_path = os.path.join(KEYS_DIR, key_file)
+
+            with st.expander(f"🔑 {name} — {fecha} (ID {rid})", expanded=False):
+                st.markdown("**Clave privada asociada**")
+                if os.path.exists(key_path):
+                    st.code(key_path)
+                    st.caption("Archivo encontrado ✓")
+                else:
+                    st.error("Archivo de clave privada NO encontrado")
+                    continue  # pasa al siguiente sin intentar descifrar
+
+                st.divider()
+                st.subheader("Recuperar contraseña")
+
+                key_input = st.text_input(
+                    "Ruta completa al archivo .bin",
+                    value=key_path,
+                    key=f"path_input_{rid}"
+                )
+
+                if st.button("Confirmar y descifrar", type="primary", key=f"btn_desc_{rid}"):
+                    placeholder = st.empty()
+                    try:
+                        placeholder.info("1. Leyendo clave privada del disco...")
+                        with open(key_input, "rb") as f:
+                            dk = f.read()
+
+                        placeholder.info("2. Consultando datos cifrados de la base de datos...")
+                        c.execute("SELECT ciphertext_ml_kem, nonce, cifrado FROM generations WHERE id = ?", (rid,))
+                        resultado = c.fetchone()
+                        if not resultado:
+                            raise ValueError("No se encontró el registro en la base de datos")
+
+                        ct, nonce, cifrado = resultado
+
+                        placeholder.info("3. Decapsulando con ML-KEM-768...")
+                        shared_key_rec = ML_KEM_768.decaps(dk, ct)
+
+                        placeholder.info("4. Inicializando AES-256-GCM con la clave recuperada...")
+                        aesgcm_rec = AESGCM(shared_key_rec)
+
+                        placeholder.info("5. Descifrando el contenido...")
+                        bytes_rec = aesgcm_rec.decrypt(nonce, cifrado, None)
+
+                        placeholder.info("6. Decodificando a texto UTF-8...")
+                        password_rec = bytes_rec.decode('utf-8')
+
+                        placeholder.success("¡Recuperación completada!")
+                        st.success("Contraseña recuperada:")
+                        st.code(password_rec, language="text")
+
+                    except Exception as e:
+                        placeholder.error("FALLO EN LA RECUPERACIÓN")
+                        with st.expander("¿Qué ha fallado exactamente?", expanded=True):
+                            st.markdown(f"**Tipo de error:** `{type(e).__name__}`")
+                            st.markdown(f"**Mensaje:** {str(e)}")
+                            st.markdown("**Traceback completo (para depuración):**")
+                            st.code(traceback.format_exc(), language="python")
+
+    st.divider()
+    if st.button("← Volver al menú principal", use_container_width=True):
+        st.session_state.mode = "menu"
         st.rerun()
+
+# ======================================================
+# CREAR (contraseña NUNCA se muestra)
+# ======================================================
+elif st.session_state.mode == "crear":
+    st.title("➕ Crear nueva contraseña segura")
+
+    if st.button("← Cancelar y volver", type="secondary"):
+        st.session_state.mode = "menu"
+        st.session_state.step = 1
+        st.session_state.temp_data = {}
+        st.rerun()
+
+    st.divider()
+
+    if st.session_state.step == 1:
+        st.subheader("Paso 1 – Información")
+        name = st.text_input("Nombre / etiqueta", placeholder="trabajo_2026 • correo_personal • wallet_cold...")
+        length = st.slider("Longitud", 12, 32, 20)
+
+        if st.button("Generar y cifrar contraseña →", type="primary"):
+            if not name.strip():
+                st.error("Introduce un nombre")
+            else:
+                with st.spinner("Generando entropía cuántica..."):
+                    try:
+                        password = generacion_contraseñas(length)
+                        st.session_state.temp_data = {
+                            "name": name,
+                            "password_bytes": password.encode('utf-8'),
+                            "length": length
+                        }
+                        st.session_state.step = 2
+                        st.rerun()
+                    except Exception as e:
+                        st.error("Fallo en generación")
+                        st.code(str(e))
+
+    elif st.session_state.step == 2:
+        st.subheader("Paso 2 – Cifrado inmediato")
+        st.info("La contraseña se ha generado de forma segura y **no se muestra en pantalla**.")
+        st.info("Se va a cifrar ahora con ML-KEM-768 + AES-256-GCM")
+
+        if st.button("Cifrar y guardar", type="primary"):
+            with st.spinner("Cifrando con ML-KEM-768 + AES-GCM..."):
+                try:
+                    ek, dk = ML_KEM_768.keygen()
+                    shared_key, ciphertext_ml_kem = ML_KEM_768.encaps(ek)
+                    nonce = os.urandom(12)
+                    aesgcm = AESGCM(shared_key)
+                    cifrado = aesgcm.encrypt(
+                        nonce,
+                        st.session_state.temp_data["password_bytes"],
+                        None
+                    )
+
+                    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    c.execute("""
+                        INSERT INTO generations (name, created_at, ciphertext_ml_kem, nonce, cifrado)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (st.session_state.temp_data["name"], fecha, ciphertext_ml_kem, nonce, cifrado))
+                    conn.commit()
+
+                    rid = c.lastrowid
+                    key_path = os.path.join(KEYS_DIR, f"key_{rid}.bin")
+                    with open(key_path, "wb") as f:
+                        f.write(dk)
+
+                    st.session_state.temp_data = {
+                        "name": st.session_state.temp_data["name"],
+                        "rid": rid,
+                        "key_path": key_path
+                    }
+                    if "password_bytes" in st.session_state.temp_data:
+                        del st.session_state.temp_data["password_bytes"]
+
+                    st.session_state.step = 3
+                    st.rerun()
+
+                except Exception as e:
+                    st.error("Error al cifrar/guardar")
+                    st.code(str(e))
+
+    elif st.session_state.step == 3:
+        st.success("¡Contraseña generada, cifrada y guardada correctamente!")
+        st.markdown("**La contraseña nunca se mostró en pantalla.**")
+        st.markdown("Solo puedes verla desde la lista usando la clave privada.")
+
+        st.divider()
+        st.markdown(f"**Nombre:** {st.session_state.temp_data['name']}")
+        st.markdown(f"**ID:** {st.session_state.temp_data['rid']}")
+        st.markdown("**Clave privada guardada en:**")
+        st.code(st.session_state.temp_data["key_path"])
+
+        st.warning("Sin esta clave privada NO podrás recuperar la contraseña.")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Ver lista de contraseñas", type="primary"):
+                st.session_state.mode = "listar"
+                st.session_state.step = 1
+                st.session_state.temp_data = {}
+                st.rerun()
+        with col2:
+            if st.button("Volver al menú"):
+                st.session_state.mode = "menu"
+                st.session_state.step = 1
+                st.session_state.temp_data = {}
+                st.rerun()
+
+conn.close()

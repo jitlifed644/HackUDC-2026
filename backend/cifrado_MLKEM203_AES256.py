@@ -29,7 +29,7 @@ print(f"  Ciphertext ML-KEM: {len(ciphertext_ml_kem)} bytes (~1088)")
 # ========================
 # 3. Generar y cifrar la contraseña con AES-256-GCM usando k
 # ========================
-contrasena = generacion_contraseñas(20)
+contrasena = generacion_contraseñas(5)
 contrasena_bytes = contrasena.encode('utf-8')
 
 # Nonce aleatorio seguro (12 bytes recomendado para GCM)
