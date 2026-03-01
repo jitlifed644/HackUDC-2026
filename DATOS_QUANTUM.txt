@@ -1,3 +1,0 @@
-Token_API = 0DAkDe6VhVZdG4GIsTgNR0d0DpUAP5Sr2fJq3WW-ZvYp
-Instancia CRN = crn:v1:bluemix:public:quantum-computing:us-east:a/51ff55549daa480ca99934466c1ec775:265ccd76-1e13-411c-aafe-a7a1a19d5e7d:
-//Todo esto en referencia a IBM Quantum --> Licencia Gratuito de uso semi-limitado//

@@ -1,50 +1,52 @@
-## ¿Qué es *Zero State Defense*?
+# Zero-State Defense: Post-Quantum Vault
 
-*Zero State Defense* es una app desarrollada durante el HackUDC2026 con el propósito de cumplir el reto de Gradiant.
+Zero-State Defense es una boveda de contraseñas de 'Cero Conocimiento' (Zero-Knowledge) diseñada para aplicar a dia de hoy y en la era post-cuantica. Integramos criptografia de vanguardia y hardware cuantico real para ofrecer una soberania digital absoluta.
 
-Nuestro principal objetivo es la creación, protección y validación de información mediante un complejo y robusto sistema de emisión y encriptado cuántico.
+---
 
-Autores: _Álvaro Sampedro Rodríguez_, _Hugo Lario Citoula_. Ambos estudiantes de Telecomunicaciones en el Cuvi.
+## Caracteristicas Principales
 
-¿Qué necesito para poder utilizar la app?
+* **Criptografia Post-Cuantica (PQC)**: Implementacion de ML-KEM-768 (Kyber) para blindar tus secretos contra futuros ataques cuanticos.
+* **Entropia Cuantica Real**: Las contraseñas se generan mediante circuitos cuanticos ejecutados en hardware real de IBM Quantum.
+* **Blindaje Argon2id**: La derivacion de tu Master Password utiliza el estandar ganador del Password Hashing Competition para resistencia maxima.
+* **Arquitectura de Conocimiento Cero**: Tu identidad cuantica solo reside en la memoria RAM volatil mientras la boveda esta abierta.
 
+---
 
+## Flujo Tecnico
 
-- Python 3.10.X o mayor
+```text
+[ Usuario ] -> (Master Password) -> [ Argon2id KDF ]
+                                           |
+                                           v
+[ IBM Quantum ] -> (Entropia Shannon) -> [ Generador de Credenciales ]
+                                           |
+                                           v
+[ Boveda SQLite ] <- (Kyber ML-KEM-768) <- [ Cifrado AESGCM-256 ]
+```
 
-- Instalar lo de API
+---
 
-- Instalar de lo AES.256 --> cryptography para el cifrado simétrico
+## Instalacion y Uso
 
-- Instalar lo de MS-KAM (203) --> PQC (FIPS 203): kyber-py
+1. **Requisitos**: Python 3.10+ e instalar dependencias desde un entorno virtual `python3 -m venv .venv` con `pip install -r requirements.txt`.
+2. **Hardware**: Crea un archivo `.env` en la raiz con tu `IBM_QUANTUM_TOKEN`.
+3. **Ejecucion**: Lanza la boveda con `streamlit run backend/app.py`.
 
-- Instalar un entorno adecuado
+---
 
-- Instalar ARG --> Hashing: argon2-cffi
+## Diario de la Hackathon (HackUDC 2026)
 
-Todo lo que se necesita en relación a la publicación del proyecto: 
+Este proyecto nacio en 36 horas de desarrollo intensivo. Durante el proceso hemos:
+1. **Iterado el Login**: Corregido bugs de sincronizacion de RAM en Streamlit para asegurar un acceso instantaneo.
+2. **Validado la Fisica**: Implementado checks de entropia de Shannon locales para asegurar que el hardware cuantico entregue bits aleatorios puros.
+3. **Simplificado para la Libertad**: Eliminado mecanismos de recuperacion para garantizar que solo tu seas el dueno de tus datos.
 
-README.md --> Empieza por que soluciona
-LICENSE and REUSE-compliant
-CONTRIBUTINg.md
-CODE_OF_CONDUCT.md
-SECURITY.md
-CHANGELOG.md
-GOVERNANCE.md
-MAINTAINERS.md
-Issue/PR or MR
-CI configuration + tests on PRs
+---
 
+## Licencia y Equipo
 
+* **Licencia**: Apache 2.0.
+* **Equipo**: Hugo Lario Citoula & Alvaro Sampedro Rodriguez.
 
-CAMBIOS URGENTES//////////////////////////////////////////////////
-* API en el primer método
-
-* Recuperacion de contraseña mediante verificacion
-
-* Meforar el front
-
-* Ordenar todo bien y bonito, legible, un readme claro y preciso
-
-* Creación de un script perfecto y sin errores.
-
+> 'En la era cuantica, la privacidad no es un lujo, es una constante fisica.'
