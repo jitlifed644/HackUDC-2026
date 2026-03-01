@@ -106,7 +106,7 @@ def generacion_contraseñas(caracteres=20, tiempo_max_espera=30, reintentos=0):
         if i == umbral_70:
             h_70 = calcular_entropia(password)
             print(f"📊 [CHECK 2] Caracteres: {i+1} (70%) | Entropía Shannon: {h_70:.4f}")
-            if h_70 < 3.2:
+            if h_70 < 2.8:
                 return generacion_contraseñas(caracteres, reintentos=reintentos+1)
     
     return password
