@@ -1,48 +1,42 @@
 import streamlit as st
 import os
 import sqlite3
+import pyotp
+import qrcode
+import math
 from datetime import datetime
+from io import BytesIO
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from dotenv import load_dotenv
-from collections import Counter
-import math
-from security import derivar_llave_maestra 
-from database import (
-    inicializar_db, guardar_config_inicial, 
-    db_guardar_credencial, db_obtener_secreto_completo
-) 
-from kyber_py.ml_kem import ML_KEM_768 
-from quantum_random import generacion_contraseñas, calcular_entropia #
 
-# 1. CONFIGURACIÓN INICIAL (DEBE SER LO PRIMERO)
-st.set_page_config(page_title="PQC Quantum Vault", page_icon="🔐", layout="wide")
+# 1. CONFIGURACIÓN INICIAL
+st.set_page_config(page_title="Zero-State Protection (Quantum Vault)", page_icon="🔐", layout="wide")
 
 load_dotenv()
-api_key = os.getenv("IBM_QUANTUM_TOKEN")
+from security import derivar_llave_maestra #
+from database import (
+    inicializar_db, guardar_config_inicial, 
+    db_guardar_credencial, db_obtener_secreto_completo, db_borrar_credencial
+) #
+from kyber_py.ml_kem import ML_KEM_768 #
+from quantum_random import generacion_contraseñas, calcular_entropia #
 
-# Inicialización física de la base de datos
 inicializar_db()
 
 if "unlocked" not in st.session_state:
     st.session_state.unlocked = False
+if "generating" not in st.session_state:
+    st.session_state.generating = False
 
 # ======================== LÓGICA DE SEGURIDAD ========================
 
 def es_password_segura(password):
-    """Valida los requisitos físicos de la Master Password."""
-    if len(password) < 12:
-        return False, "⚠️ Mínimo 12 caracteres."
-    if not any(c.isupper() for c in password):
-        return False, "⚠️ Falta una MAYÚSCULA."
-    if not any(c.islower() for c in password):
-        return False, "⚠️ Falta una minúscula."
-    if not any(c.isdigit() for c in password):
-        return False, "⚠️ Falta un número."
-    
-    caracteres_especiales = "!@#$%^&*" 
-    if not any(c in caracteres_especiales for c in password):
-        return False, f"⚠️ Falta un carácter especial ({caracteres_especiales})."
-    
+    """Valida los requisitos de la Master Password."""
+    if len(password) < 12: return False, "⚠️ Mínimo 12 caracteres."
+    if not any(c.isupper() for c in password): return False, "⚠️ Falta una MAYÚSCULA."
+    if not any(c.islower() for c in password): return False, "⚠️ Falta una minúscula."
+    if not any(c.isdigit() for c in password): return False, "⚠️ Falta un número."
+    if not any(c in "!@#$%^&*" for c in password): return False, "⚠️ Falta un símbolo (!@#$%^&*)."
     return True, ""
 
 # ======================== PANTALLA DE ACCESO ========================
@@ -51,89 +45,134 @@ def pantalla_login():
     st.title("🔐 Acceso a la Bóveda Post-Cuántica")
     
     conn = sqlite3.connect("vault.db")
-    # SELECT explícito para garantizar integridad de los datos
-    config = conn.execute("SELECT ek, dk_cifrada, salt, nonce_dk FROM configuracion WHERE id=1").fetchone()
+    config = conn.execute("SELECT ek, dk_cifrada, salt, nonce_dk, totp_secret FROM configuracion WHERE id=1").fetchone()
     conn.close()
 
+    # --- FLUJO 1: MOSTRAR KIT TRAS CREACIÓN ---
+    if st.session_state.get("setup_complete"):
+        st.success("🎉 ¡Bóveda Sellada! Guarda tu Kit de Rescate ahora.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("🔑 Recovery Key")
+            st.code(st.session_state.recovery_key)
+            st.download_button("💾 Descargar Binario", data=st.session_state.recovery_bin, file_name="recovery_identity.bin")
+        with c2:
+            st.subheader("📱 Google Authenticator")
+            qr_img = qrcode.make(st.session_state.totp_uri)
+            buf = BytesIO()
+            qr_img.save(buf)
+            st.image(buf.getvalue(), caption="Escanea este QR")
+        
+        if st.button("🚀 Entrar a la Bóveda"):
+            del st.session_state.setup_complete
+            st.session_state.unlocked = True
+            st.rerun() # Entra directo tras la creación 
+        return
+
+    # --- FLUJO 2: REGISTRO INICIAL ---
     if not config:
-        st.warning("✨ Configuración de nueva Bóveda (Primera vez)")
-        st.markdown("Requisitos: 12+ caracteres, [A-Z], [a-z], [0-9] y [!@#$%^&*]")
-        
-        # Mantenemos vuestra lógica de registro con entropía
+        st.warning("✨ Configuración inicial")
         m_pass = st.text_input("Define tu Master Password", type="password")
-        
-        confirmar_riesgo = False
-        h_val = 0
-
         if m_pass:
-            h_val = calcular_entropia(m_pass) 
-            progreso = min(h_val / 4.5, 1.0)
-            
-            if h_val < 2.5:
-                st.error(f"🔴 Muy Débil ($H = {h_val:.2f}$)")
-            elif h_val < 3.5:
-                st.warning(f"🟡 Moderada ($H = {h_val:.2f}$)")
-            else:
-                st.success(f"🟢 Fuerte ($H = {h_val:.2f}$)")
-            
-            st.progress(progreso)
+            h = calcular_entropia(m_pass)
+            st.progress(min(h/4.5, 1.0), text=f"Entropía: {h:.2f}")
 
-            if h_val < 3.2:
-                st.info("Patrones repetitivos detectados.")
-                confirmar_riesgo = st.checkbox("Acepto el riesgo de baja entropía.")
-
-        if st.button("🚀 Crear y Sellar Bóveda"):
-            valida, mensaje = es_password_segura(m_pass)
-            if not valida:
-                st.error(mensaje)
-            elif h_val < 3.2 and not confirmar_riesgo:
-                st.error("❌ Confirma el riesgo de entropía baja.")
-            else:
-                with st.spinner("Generando identidad PQC..."):
+        if st.button("🚀 Crear Bóveda"):
+            valida, msg = es_password_segura(m_pass)
+            if valida:
+                with st.spinner("Generando Identidad PQC..."):
                     try:
-                        # Identidad Kyber y blindaje Argon2id
                         ek, dk = ML_KEM_768.keygen()
                         salt = os.urandom(16)
-                        master_key = derivar_llave_maestra(m_pass, salt)
-                        nonce_dk = os.urandom(12)
-                        dk_cifrada = AESGCM(master_key).encrypt(nonce_dk, dk, None)
+                        m_key = derivar_llave_maestra(m_pass, salt)
+                        n_dk = os.urandom(12)
+                        dk_c = AESGCM(m_key).encrypt(n_dk, dk, None)
                         
-                        guardar_config_inicial(ek, dk_cifrada, salt, nonce_dk)
+                        r_key = generacion_contraseñas(32)
+                        totp_sec = pyotp.random_base32()
+                        r_salt = os.urandom(16)
+                        r_m_key = derivar_llave_maestra(r_key, r_salt)
+                        r_n = os.urandom(12)
+                        r_blob = AESGCM(r_m_key).encrypt(r_n, dk, None)
                         
-                        # Inyectamos en RAM y saltamos el login 
-                        st.session_state.dk = dk 
-                        st.session_state.ek = ek
-                        st.session_state.unlocked = True
-                        st.balloons()
+                        guardar_config_inicial(ek, dk_c, salt, n_dk, totp_sec) #
+                        
+                        st.session_state.recovery_key = r_key
+                        st.session_state.recovery_bin = r_salt + r_n + r_blob
+                        st.session_state.totp_uri = pyotp.totp.TOTP(totp_sec).provisioning_uri(issuer_name="ZS-Protection")
+                        st.session_state.setup_complete = True
+                        st.session_state.dk, st.session_state.ek = dk, ek
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error en creación: {e}")
+                        st.error(f"Error en la creación: {e}")
+            else:
+                st.error(msg) # Muestra por qué la contraseña no es válida [cite: 2026-01-06]
+
+    # --- FLUJO 3: LOGIN O RESCATE ---
     else:
-        
         with st.form("login_form", clear_on_submit=False):
-            # Añadimos key="pwd_login" para forzar el guardado en session_state
-            st.text_input("Introduce tu Master Password", type="password", key="pwd_login")
+            pwd_input = st.text_input("Master Password", type="password")
             submit = st.form_submit_button("Desbloquear")
             
             if submit:
-                # Leemos directamente del estado de la clave (key) 
-                m_pass_input = st.session_state.pwd_login
-                db_ek, db_dk_c, db_salt, db_nonce_dk = config
-                
-                with st.spinner("Abriendo búnker..."):
-                    m_key = derivar_llave_maestra(m_pass_input, db_salt) #
-                    try:
-                        # Desencriptado de la DK de Kyber 
-                        st.session_state.dk = AESGCM(m_key).decrypt(db_nonce_dk, db_dk_c, None)
-                        st.session_state.ek = db_ek
-                        st.session_state.unlocked = True
+                if not pwd_input:
+                    st.warning("⚠️ Por favor, introduce tu contraseña.")
+                else:
+                    # RE-CONSULTA DENTRO DEL FORM: Asegura datos frescos [cite: 2026-03-01]
+                    conn = sqlite3.connect("vault.db")
+                    current_config = conn.execute("SELECT ek, dk_cifrada, salt, nonce_dk, totp_secret FROM configuracion WHERE id=1").fetchone()
+                    conn.close()
+
+                    if current_config:
+                        ek_db, dk_c_db, salt_db, n_db, _ = current_config
                         
-                        # Higiene: Borramos la pass en texto claro de la sesión 
-                        del st.session_state.pwd_login
-                        
-                        st.rerun()
-                    except Exception:
-                        st.error("Acceso denegado. Contraseña incorrecta.")
+                        with st.spinner("🔓 Derivando llave y abriendo búnker..."):
+                            # Derivación de Argon2id
+                            m_key = derivar_llave_maestra(pwd_input, salt_db)
+                            try:
+                                # Intentamos descifrar la DK de Kyber
+                                decrypted_dk = AESGCM(m_key).decrypt(n_db, dk_c_db, None)
+                                
+                                # Si llegamos aquí, todo es correcto. Guardamos en RAM [cite: 2026-01-06]
+                                st.session_state.dk = decrypted_dk
+                                st.session_state.ek = ek_db
+                                st.session_state.unlocked = True
+                                st.rerun() 
+                            except Exception:
+                                # Si falla el descifrado, es que la pass es incorrecta [cite: 2026-03-01]
+                                st.error("❌ Contraseña incorrecta. El búnker permanece sellado.")
+                    else:
+                        st.error("🚨 Error crítico: No se encontró la configuración del búnker.")
+
+        with st.expander("🆘 Rescate de Emergencia (He olvidado mi contraseña)"):
+            st.write("Sube tu binario, pon tu clave de 32 caracteres y el código 2FA.")
+            file = st.file_uploader("Cargar recovery_identity.bin", type=["bin"])
+            rk_in = st.text_input("Recovery Key (32 chars)", type="password")
+            otp_in = st.text_input("Código Google Authenticator", max_chars=6)
+            new_p = st.text_input("Nueva Master Password", type="password")
+            
+            if st.button("🔓 Restaurar Acceso"):
+                if file and rk_in and otp_in and new_p:
+                    totp = pyotp.TOTP(config[4])
+                    if totp.verify(otp_in):
+                        try:
+                            data = file.read()
+                            rs, rn, rb = data[:16], data[16:28], data[28:]
+                            rmk = derivar_llave_maestra(rk_in, rs)
+                            dk_orig = AESGCM(rmk).decrypt(rn, rb, None)
+                            
+                            ns, nn = os.urandom(16), os.urandom(12)
+                            nmk = derivar_llave_maestra(new_p, ns)
+                            ndkc = AESGCM(nmk).encrypt(nn, dk_orig, None)
+                            
+                            conn = sqlite3.connect("vault.db")
+                            conn.execute("UPDATE configuracion SET dk_cifrada=?, salt=?, nonce_dk=? WHERE id=1", (ndkc, ns, nn))
+                            conn.commit(); conn.close()
+                            st.success("✅ Acceso restaurado. Ya puedes loguearte.")
+                        except: st.error("❌ Error: Recovery Key o archivo binario incorrectos.")
+                    else: st.error("❌ Código 2FA incorrecto.")
+                else:
+                    st.warning("⚠️ Rellena todos los campos para el rescate.")
 
 if not st.session_state.unlocked:
     pantalla_login()
@@ -142,54 +181,41 @@ if not st.session_state.unlocked:
 # ======================== INTERFAZ PRINCIPAL ========================
 
 st.sidebar.title("🛡️ PQC Vault v1.0")
-opcion = st.sidebar.radio("Navegación", ["🏠 Inicio", "➕ Generar", "📋 Mi Cofre"])
+opcion = st.sidebar.radio("Navegación", ["🏠 Inicio", "➕ Generar", "📋 Mi Cofre"], disabled=st.session_state.generating)
 
-if st.sidebar.button("🔒 Cerrar Bóveda"):
+if st.sidebar.button("🔒 Cerrar Bóveda", disabled=st.session_state.generating):
     st.session_state.unlocked = False
     st.rerun()
 
 if opcion == "🏠 Inicio":
     st.title("🚀 Bóveda Activa")
-    st.success("Identidad verificada en RAM. Bóveda desbloqueada.")
+    st.success("Identidad verificada en RAM. Bóveda desbloqueada en Vigo.")
 
 elif opcion == "➕ Generar":
-    st.title("➕ Generar Nueva Credencial")
+    st.title("➕ Nueva Credencial")
+    serv = st.text_input("Nombre del Servicio", placeholder="ej. GitHub, MIT, Spotify", disabled=st.session_state.generating)
+    long = st.slider("Longitud de Contraseña", 12, 32, 20, disabled=st.session_state.generating)
     
-    # 1. Inicializamos el estado de generación si no existe
-    if "generating" not in st.session_state:
-        st.session_state.generating = False
-
-    serv = st.text_input("Nombre del Servicio", disabled=st.session_state.generating)
-    long = st.slider("Longitud", 12, 32, 20, disabled=st.session_state.generating)
-    
-    # 2. El botón se deshabilita si ya hay una generación en curso
     if st.button("Generar con IBM Quantum", disabled=st.session_state.generating):
         if not serv:
-            st.error("Ponle un nombre al servicio.")
+            st.error("⚠️ Debes asignar un nombre al servicio para generar la clave.") 
         else:
             st.session_state.generating = True
-            st.rerun() # Forzamos recarga para que el botón aparezca deshabilitado
+            st.rerun()
 
-    # 3. Lógica de ejecución bloqueante
     if st.session_state.generating:
-        with st.spinner("⏳ Obteniendo entropía cuántica de IBM... Por favor, espera."):
+        with st.spinner("⏳ Conectando con hardware cuántico..."):
             try:
-                # Generación real
                 pass_q = generacion_contraseñas(long)
-                
-                # Cifrado PQC
-                shared_key, ct = ML_KEM_768.encaps(st.session_state.ek)
+                sk, ct = ML_KEM_768.encaps(st.session_state.ek)
                 nonce = os.urandom(12)
-                cifrado = AESGCM(shared_key).encrypt(nonce, pass_q.encode(), None)
-                
-                # Guardado
-                db_guardar_credencial(1, serv, "usuario", ct, cifrado, nonce)
-                st.success(f"¡{serv} guardado con éxito!")
+                cif = AESGCM(sk).encrypt(nonce, pass_q.encode(), None)
+                db_guardar_credencial(1, serv, "usuario", ct, cif, nonce)
+                st.success(f"✅ ¡Contraseña para {serv} generada y guardada!")
                 st.balloons()
             except Exception as e:
-                st.error(f"Fallo en la generación: {e}")
+                st.error(f"Fallo en el enlace cuántico: {e}")
             finally:
-                # 4. LIBERAR EL BOTÓN siempre, pase lo que pase
                 st.session_state.generating = False
                 st.rerun()
 
@@ -200,13 +226,18 @@ elif opcion == "📋 Mi Cofre":
     conn.close()
 
     if not items:
-        st.info("El cofre está vacío.")
+        st.info("📭 El cofre está vacío. ¡Empieza a generar seguridad cuántica!") 
     else:
         for rid, serv in items:
             with st.expander(f"🔐 {serv}"):
-                # FIX: Se eliminó cualquier llamada a calcular_entropia aquí 
-                if st.button("Revelar", key=f"btn_{rid}"):
-                    ct, cif, non = db_obtener_secreto_completo(rid) #
-                    sk_rec = ML_KEM_768.decaps(st.session_state.dk, ct) # 
-                    pass_f = AESGCM(sk_rec).decrypt(non, cif, None).decode()
-                    st.code(pass_f)
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("👁️ Revelar", key=f"rev_{rid}"):
+                        ct, cif, non = db_obtener_secreto_completo(rid)
+                        sk_rec = ML_KEM_768.decaps(st.session_state.dk, ct)
+                        pf = AESGCM(sk_rec).decrypt(non, cif, None).decode()
+                        st.code(pf)
+                with c2:
+                    if st.checkbox("Confirmar borrado.", key=f"chk_{rid}"):
+                        if st.button("🗑️ Borrar", key=f"del_{rid}", type="primary"):
+                            db_borrar_credencial(rid); st.rerun()
